@@ -6,43 +6,39 @@ app = Flask(__name__)
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Prend les données brutes peu importe le format
         raw_data = request.get_data(as_text=True)
         print("🔧 Données brutes reçues:", raw_data[:1000])
-        
-        # Extrait le script par REGEX peu importe le format JSON
-        script_match = re.search(r'"script"\s*:\s*"([^"]*)"', raw_data)
-        if not script_match:
-            # Essaye avec guillemets non échappés
-            script_match = re.search(r'"script"\s*:\s*"([^"]*?)(?="|\})', raw_data)
-        
-        if script_match:
-            script_content = script_match.group(1)
-            # Nettoie les échappements restants
-            script_content = script_content.replace('\\"', '"')
-            print(f"✅ Script extrait: {len(script_content)} caractères")
+
+        # 1️⃣ Tentative JSON classique
+        data = request.get_json(force=True, silent=True)
+        if data and "script" in data:
+            script_content = data["script"]
+            method = "json"
         else:
-            # Fallback: prend tout après "script": 
-            if '"script":' in raw_data:
-                script_content = raw_data.split('"script":', 1)[1].strip(' "}')
+            # 2️⃣ Tentative regex robuste
+            match = re.search(r'"script"\s*:\s*"((?:\\.|[^"\\])*)"', raw_data)
+            if match:
+                script_content = match.group(1).replace('\\"', '"')
+                method = "regex"
             else:
                 script_content = "Script non trouvé"
-        
-        # Réponse succès peu importe le contenu
+                method = "fallback"
+
+        print(f"✅ Script extrait via {method}: {len(script_content)} caractères")
+
         return jsonify({
             "status": "success",
-            "message": "Script traité malgré guillemets!",
+            "method": method,
             "script_length": len(script_content),
-            "received": True
+            "preview": script_content[:100],
         })
-        
+
     except Exception as e:
-        # Même en erreur, retourne 200 pour que Make.com continue
         return jsonify({
             "status": "repaired",
-            "message": f"Erreur réparée: {str(e)}",
-            "script_received": True
-        }), 200  # ← 200 au lieu de 500 !
+            "message": str(e),
+        }), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+
