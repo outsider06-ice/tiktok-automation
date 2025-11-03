@@ -1,54 +1,58 @@
 from flask import Flask, request, jsonify
 import re
+import json
 
 app = Flask(__name__)
 
-@app.route('/webhook', methods=['POST'])
+@app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        # 🔧 Récupère les données brutes
         raw_data = request.get_data(as_text=True)
         print("🔧 Données brutes reçues (début):", raw_data[:1000])
 
-        # 🧩 Étape 1 : tentative de parsing JSON propre
-        data = request.get_json(force=True, silent=True)
         script_content = None
         method_used = None
 
-        if data and "script" in data:
-            # ✅ Cas normal : Make.com envoie un JSON bien formé
-            script_content = data["script"]
-            method_used = "json"
-        else:
-            # 🧩 Étape 2 : fallback via REGEX robuste
-            match = re.search(r'"script"\s*:\s*"((?:\\.|[^"\\])*)"', raw_data, re.S)
+        # 1️⃣ Tentative de parsing JSON classique
+        try:
+            data = json.loads(raw_data)
+            if isinstance(data, dict) and "script" in data:
+                script_content = data["script"]
+                method_used = "json"
+        except Exception:
+            pass  # JSON mal formé → on passera au fallback regex
+
+        # 2️⃣ Fallback regex tolérant (même si JSON cassé)
+        if not script_content:
+            # Cette regex capture TOUT après "script": jusqu'au dernier guillemet avant la fin d'objet
+            match = re.search(r'"script"\s*:\s*"([\s\S]*?)"\s*\}', raw_data)
             if match:
-                script_content = match.group(1).replace('\\"', '"')
+                script_content = match.group(1)
+                script_content = script_content.replace('\\"', '"')
                 method_used = "regex"
+
+        # 3️⃣ Fallback ultime (si rien trouvé)
+        if not script_content:
+            if '"script":' in raw_data:
+                script_content = raw_data.split('"script":', 1)[1]
+                script_content = script_content.strip(' "}\n\t')
+                method_used = "split"
             else:
-                # 🧩 Étape 3 : fallback ultime (tentative de découpe simple)
-                if '"script":' in raw_data:
-                    script_content = raw_data.split('"script":', 1)[1].split("}", 1)[0]
-                    script_content = script_content.strip(' "}\n\t')
-                    method_used = "split"
-                else:
-                    script_content = "Script non trouvé"
-                    method_used = "none"
+                script_content = "Script non trouvé"
+                method_used = "none"
 
         print(f"✅ Script extrait via {method_used}: {len(script_content)} caractères")
 
-        # ✅ Réponse JSON pour Make.com
         return jsonify({
             "status": "success",
             "method": method_used,
             "message": "Script reçu et traité",
             "script_length": len(script_content),
-            "preview": script_content[:150] + ("..." if len(script_content) > 150 else ""),
+            "preview": script_content[:200] + ("..." if len(script_content) > 200 else ""),
             "received": True
         }), 200
 
     except Exception as e:
-        # 🔁 Toujours renvoyer 200 pour éviter que Make échoue
         print("❌ Erreur webhook:", e)
         return jsonify({
             "status": "repaired",
@@ -56,7 +60,7 @@ def webhook():
             "script_received": False
         }), 200
 
-# 🔓 (Optionnel) Autoriser les requêtes cross-origin
+
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -64,6 +68,8 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
+
 
